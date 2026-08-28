@@ -7,10 +7,61 @@ import {
 } from 'lucide-react';
 import './style.css';
 
-const initialUsers = {
-  Patricia: { xp: 0, words: 0, oral: 0 },
-  'Marie-Christine': { xp: 0, words: 0, oral: 0 }
-};
+const STORAGE_PREFIX = 'mi-espanol-v4';
+const ACTIVE_PROFILE_KEY = `${STORAGE_PREFIX}-active-profile`;
+const PROFILE_NAMES = ['Patricia', 'Marie-Christine'];
+
+const createDefaultProfile = () => ({
+  version: 4,
+  stats: { xp: 0, words: 0, oral: 0 },
+  completed: {},
+  history: []
+});
+
+function profileStorageKey(name) {
+  return `${STORAGE_PREFIX}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+function loadProfile(name) {
+  try {
+    const saved = localStorage.getItem(profileStorageKey(name));
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return {
+        ...createDefaultProfile(),
+        ...parsed,
+        stats: { ...createDefaultProfile().stats, ...(parsed.stats || {}) },
+        completed: parsed.completed || {},
+        history: Array.isArray(parsed.history) ? parsed.history : []
+      };
+    }
+
+    // Migration automatique des données de la V3 vers la V4.
+    const oldUsers = JSON.parse(localStorage.getItem('mi-users-v3-1') || 'null');
+    const oldCompleted = JSON.parse(localStorage.getItem('mi-completed-v3-1') || 'null');
+    const oldHistory = JSON.parse(localStorage.getItem('mi-history-v3-1') || 'null');
+    const migrated = {
+      ...createDefaultProfile(),
+      stats: { ...createDefaultProfile().stats, ...(oldUsers?.[name] || {}) },
+      completed: oldCompleted?.[name] || {},
+      history: Array.isArray(oldHistory) ? oldHistory.filter((item) => item.who === name) : []
+    };
+    localStorage.setItem(profileStorageKey(name), JSON.stringify(migrated));
+    return migrated;
+  } catch (error) {
+    console.error('Chargement impossible :', error);
+    return createDefaultProfile();
+  }
+}
+
+function saveProfile(name, data) {
+  if (!name || !data) return;
+  try {
+    localStorage.setItem(profileStorageKey(name), JSON.stringify(data));
+  } catch (error) {
+    console.error('Sauvegarde impossible :', error);
+  }
+}
 
 const catalog = {
   daily: {
@@ -189,18 +240,9 @@ function speak(text, rate = 0.9) {
 }
 
 function App() {
-  const [users, setUsers] = useState(() =>
-    JSON.parse(localStorage.getItem('mi-users-v3-1') || 'null') || initialUsers
-  );
-  const [completed, setCompleted] = useState(() =>
-    JSON.parse(localStorage.getItem('mi-completed-v3-1') || 'null') || {
-      Patricia: {}, 'Marie-Christine': {}
-    }
-  );
-  const [history, setHistory] = useState(() =>
-    JSON.parse(localStorage.getItem('mi-history-v3-1') || '[]')
-  );
-  const [who, setWho] = useState('Patricia');
+  const [who, setWho] = useState(() => localStorage.getItem(ACTIVE_PROFILE_KEY) || '');
+  const [profileData, setProfileData] = useState(null);
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const [tab, setTab] = useState('home');
   const [category, setCategory] = useState('daily');
   const [exerciseIndex, setExerciseIndex] = useState(0);
@@ -209,9 +251,22 @@ function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
 
-  useEffect(() => localStorage.setItem('mi-users-v3-1', JSON.stringify(users)), [users]);
-  useEffect(() => localStorage.setItem('mi-completed-v3-1', JSON.stringify(completed)), [completed]);
-  useEffect(() => localStorage.setItem('mi-history-v3-1', JSON.stringify(history)), [history]);
+  useEffect(() => {
+    if (!who) {
+      setProfileData(null);
+      setProfileLoaded(false);
+      return;
+    }
+    setProfileLoaded(false);
+    setProfileData(loadProfile(who));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, who);
+    setProfileLoaded(true);
+  }, [who]);
+
+  useEffect(() => {
+    if (who && profileData && profileLoaded) saveProfile(who, profileData);
+  }, [who, profileData, profileLoaded]);
+
   useEffect(() => {
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, []);
@@ -221,11 +276,53 @@ function App() {
     []
   );
 
-  const user = users[who];
+  function selectProfile(name) {
+    setProfileLoaded(false);
+    setProfileData(null);
+    setWho(name);
+  }
+
+  function changeProfile() {
+    localStorage.removeItem(ACTIVE_PROFILE_KEY);
+    setWho('');
+    setProfileData(null);
+    setProfileLoaded(false);
+    setTab('home');
+    resetAttempt();
+  }
+
+  if (!who) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: 'linear-gradient(135deg,#fff8e1,#ffe0b2)', fontFamily: 'Arial,sans-serif' }}>
+        <section style={{ width: '100%', maxWidth: 520, padding: 32, background: '#fff', borderRadius: 24, textAlign: 'center', boxShadow: '0 12px 35px rgba(0,0,0,.12)' }}>
+          <div style={{ fontSize: 64 }}>🇪🇸</div>
+          <h1 style={{ color: '#c62828', marginBottom: 8 }}>Mi Español</h1>
+          <p style={{ color: '#555', fontSize: 18, marginBottom: 28 }}>Qui apprend aujourd’hui ?</p>
+          <div style={{ display: 'grid', gap: 14 }}>
+            {PROFILE_NAMES.map((name) => (
+              <button key={name} type="button" onClick={() => selectProfile(name)} style={{ padding: 18, border: 0, borderRadius: 16, cursor: 'pointer', fontWeight: 700, fontSize: 18, background: '#f5f5f5', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }}>
+                👤 {name}
+              </button>
+            ))}
+          </div>
+          <p style={{ marginTop: 24, color: '#777', fontSize: 14 }}>Même URL, progressions séparées, sans mot de passe</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (!profileLoaded || !profileData) {
+    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>Chargement de la progression…</div>;
+  }
+
+  const user = profileData.stats;
+  const completed = profileData.completed;
+  const history = profileData.history;
   const categoryData = catalog[category];
   const exercise = categoryData.items[exerciseIndex];
   const exerciseKey = `${category}-${exerciseIndex}`;
-  const doneCount = Object.keys(completed[who] || {}).length;
+  const doneCount = Object.keys(completed).length;
+  const totalExercises = Object.values(catalog).reduce((sum, module) => sum + module.items.length, 0);
 
   function resetAttempt() {
     setText('');
@@ -248,34 +345,24 @@ function App() {
 
   function saveAttempt(answer) {
     const value = calculateScore(answer, exercise[2]);
-    const firstSuccess = value >= 70 && !completed[who][exerciseKey];
+    const firstSuccess = value >= 70 && !completed[exerciseKey];
     setResult(value);
-    setHistory((current) => [
-      {
-        who,
-        category: categoryData.title,
-        exercise: exerciseIndex + 1,
-        text: answer,
-        score: value,
-        date: new Date().toLocaleDateString('fr-FR')
-      },
-      ...current
-    ].slice(0, 60));
-    setUsers((current) => ({
+    setProfileData((current) => ({
       ...current,
-      [who]: {
-        ...current[who],
-        xp: current[who].xp + (value >= 70 ? 15 : 5),
-        words: current[who].words + (firstSuccess ? normalize(exercise[2]).split(' ').length : 0),
-        oral: Math.min(100, Math.round(((current[who].oral * Math.max(doneCount, 1)) + value) / (Math.max(doneCount, 1) + 1)))
-      }
+      stats: {
+        ...current.stats,
+        xp: current.stats.xp + (value >= 70 ? 15 : 5),
+        words: current.stats.words + (firstSuccess ? normalize(exercise[2]).split(' ').length : 0),
+        oral: Math.min(100, Math.round(((current.stats.oral * Math.max(doneCount, 1)) + value) / (Math.max(doneCount, 1) + 1)))
+      },
+      completed: value >= 70
+        ? { ...current.completed, [exerciseKey]: true }
+        : current.completed,
+      history: [
+        { who, category: categoryData.title, exercise: exerciseIndex + 1, text: answer, score: value, date: new Date().toLocaleDateString('fr-FR') },
+        ...current.history
+      ].slice(0, 60)
     }));
-    if (value >= 70) {
-      setCompleted((current) => ({
-        ...current,
-        [who]: { ...current[who], [exerciseKey]: true }
-      }));
-    }
   }
 
   function listen() {
@@ -288,10 +375,7 @@ function App() {
     recognition.lang = 'es-ES';
     recognition.interimResults = false;
     recognition.continuous = false;
-    recognition.onstart = () => {
-      setListening(true);
-      setResult(null);
-    };
+    recognition.onstart = () => { setListening(true); setResult(null); };
     recognition.onend = () => setListening(false);
     recognition.onerror = (event) => {
       setListening(false);
@@ -312,163 +396,107 @@ function App() {
       <aside>
         <h2>🇪🇸 Mi Español</h2>
         {[
-          ['home', 'Accueil', Home],
-          ['path', 'Parcours', BookOpen],
-          ['talk', 'Coach vocal', MessageCircle],
-          ['progress', 'Progression', Activity]
+          ['home', 'Accueil', Home], ['path', 'Parcours', BookOpen],
+          ['talk', 'Coach vocal', MessageCircle], ['progress', 'Progression', Activity]
         ].map(([id, label, Icon]) => (
-          <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
-            <Icon /> {label}
-          </button>
+          <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}><Icon /> {label}</button>
         ))}
       </aside>
 
       <main>
         <header>
-          <div>
-            <small>¡Buenos días, {who}!</small>
-            <h1>Objectif Espagne</h1>
-          </div>
+          <div><small>¡Buenos días, {who}!</small><h1>Objectif Espagne</h1></div>
           <div className="profiles">
-            {Object.keys(users).map((name) => (
-              <button key={name} className={who === name ? 'on' : ''} onClick={() => setWho(name)}>
-                {name}
-              </button>
-            ))}
+            <strong>👤 {who}</strong>
+            <button type="button" onClick={changeProfile}>Changer de profil</button>
           </div>
         </header>
 
-        {tab === 'home' && (
-          <>
-            <section className="hero">
-              <h2>Parler en Espagne, pour de vrai.</h2>
-              <p>80 exercices pratiques avec entraînement vocal et progression individuelle.</p>
-              <button onClick={() => openExercise('daily')}>🎤 Commencer à parler</button>
-            </section>
-            <div className="stats">
-              <article><Flame /><b>{user.xp}</b><span>XP</span></article>
-              <article><Sparkles /><b>{user.words}</b><span>Mots</span></article>
-              <article><Award /><b>{user.oral}%</b><span>Oral</span></article>
-              <article><CheckCircle /><b>{doneCount}/80</b><span>Réussis</span></article>
-            </div>
-          </>
-        )}
+        {tab === 'home' && <>
+          <section className="hero">
+            <h2>Parler en Espagne, pour de vrai.</h2>
+            <p>{totalExercises} exercices pratiques avec entraînement vocal et progression individuelle.</p>
+            <button onClick={() => openExercise('daily')}>🎤 Commencer à parler</button>
+          </section>
+          <div className="stats">
+            <article><Flame /><b>{user.xp}</b><span>XP</span></article>
+            <article><Sparkles /><b>{user.words}</b><span>Mots</span></article>
+            <article><Award /><b>{user.oral}%</b><span>Oral</span></article>
+            <article><CheckCircle /><b>{doneCount}/{totalExercises}</b><span>Réussis</span></article>
+          </div>
+        </>}
 
-        {tab === 'path' && (
-          <>
-            <h2>Parcours Vie en Espagne</h2>
-            <div className="grid">
-              {Object.entries(catalog).map(([id, module]) => {
-                const Icon = module.icon;
-                const count = module.items.filter((_, index) => completed[who][`${id}-${index}`]).length;
-                return (
-                  <article key={id} onClick={() => openExercise(id)}>
-                    <Icon />
-                    <h3>{module.title}</h3>
-                    <p>{module.description}</p>
-                    <strong>{count}/10 exercices réussis</strong>
-                  </article>
-                );
-              })}
-            </div>
-          </>
-        )}
+        {tab === 'path' && <>
+          <h2>Parcours Vie en Espagne</h2>
+          <div className="grid">
+            {Object.entries(catalog).map(([id, module]) => {
+              const Icon = module.icon;
+              const count = module.items.filter((_, index) => completed[`${id}-${index}`]).length;
+              return <article key={id} onClick={() => openExercise(id)}>
+                <Icon /><h3>{module.title}</h3><p>{module.description}</p>
+                <strong>{count}/{module.items.length} exercices réussis</strong>
+              </article>;
+            })}
+          </div>
+        </>}
 
-        {tab === 'talk' && (
-          <>
-            <h2>Coach vocal</h2>
-            <div className="pills">
-              {Object.entries(catalog).map(([id, module]) => (
-                <button key={id} className={category === id ? 'on' : ''} onClick={() => openExercise(id)}>
-                  {module.title.replace(/^\d+\. /, '')}
+        {tab === 'talk' && <>
+          <h2>Coach vocal</h2>
+          <div className="pills">
+            {Object.entries(catalog).map(([id, module]) => (
+              <button key={id} className={category === id ? 'on' : ''} onClick={() => openExercise(id)}>{module.title.replace(/^\d+\. /, '')}</button>
+            ))}
+          </div>
+          <div className="conversationLayout">
+            <div className="exerciseList">
+              <h3>{categoryData.title}</h3>
+              {categoryData.items.map((item, index) => (
+                <button key={index} className={`${exerciseIndex === index ? 'on' : ''} ${completed[`${category}-${index}`] ? 'done' : ''}`} onClick={() => openExercise(category, index)}>
+                  {index + 1}. {item[1]}
                 </button>
               ))}
             </div>
-
-            <div className="conversationLayout">
-              <div className="exerciseList">
-                <h3>{categoryData.title}</h3>
-                {categoryData.items.map((item, index) => (
-                  <button
-                    key={index}
-                    className={`${exerciseIndex === index ? 'on' : ''} ${completed[who][`${category}-${index}`] ? 'done' : ''}`}
-                    onClick={() => openExercise(category, index)}
-                  >
-                    {index + 1}. {item[1]}
-                  </button>
-                ))}
+            <section className="coach lesson">
+              <p><b>Exercice {exerciseIndex + 1} / {categoryData.items.length}</b></p>
+              <h3>{exercise[0]}</h3><p>{exercise[1]}</p>
+              <div className="audio">
+                <button className="listen" onClick={() => speak(exercise[0], 0.7)}><Volume2 /> Lent</button>
+                <button className="listen" onClick={() => speak(exercise[0], 1)}><Volume2 /> Normal</button>
               </div>
-
-              <section className="coach lesson">
-                <p><b>Exercice {exerciseIndex + 1} / 10</b></p>
-                <h3>{exercise[0]}</h3>
-                <p>{exercise[1]}</p>
-                <div className="audio">
-                  <button className="listen" onClick={() => speak(exercise[0], 0.7)}><Volume2 /> Lent</button>
-                  <button className="listen" onClick={() => speak(exercise[0], 1)}><Volume2 /> Normal</button>
-                </div>
-
-                <div className="target">
-                  <b>Réponse à prononcer</b>
-                  <h3>{exercise[2]}</h3>
-                  <p>Prononciation : {exercise[3]}</p>
-                </div>
-
-                <textarea
-                  value={text}
-                  onChange={(event) => { setText(event.target.value); setResult(null); }}
-                  placeholder="Répondez au micro ou écrivez ici…"
-                />
-                <button className={`mic ${listening ? 'live' : ''}`} onClick={listen}>
-                  {listening ? <MicOff /> : <Mic />}
-                  {listening ? ' Je vous écoute…' : ' Répondre au micro'}
-                </button>
-                {error && <p className="error">{error}</p>}
-                <button className="check" disabled={!text.trim()} onClick={() => saveAttempt(text)}>
-                  Corriger
-                </button>
-
-                {result !== null && (
-                  <div className="feedback">
-                    <b className={result >= 70 ? 'good' : 'retry'}>{result}%</b>
-                    <p>✅ Modèle : {exercise[2]}</p>
-                    <p>🗣 Prononciation : {exercise[3]}</p>
-                    <p>{result >= 85 ? 'Bravo, très bonne réponse.' : result >= 70 ? 'Bien joué. Répétez encore une fois.' : 'Reprenez lentement, mot par mot.'}</p>
-                  </div>
-                )}
-
-                <div className="exerciseNav">
-                  <button onClick={() => move(-1)}><ChevronLeft /> Précédent</button>
-                  <button onClick={() => move(1)}>Suivant <ChevronRight /></button>
-                </div>
-              </section>
-            </div>
-          </>
-        )}
-
-        {tab === 'progress' && (
-          <>
-            <h2>Progression de {who}</h2>
-            <div className="progress">
-              <b>Expression orale</b><span>{user.oral}%</span>
-              <i><em style={{ width: `${user.oral}%` }} /></i>
-            </div>
-            <p>{doneCount} exercices réussis sur 80.</p>
-            <section className="history">
-              <h3>Historique oral</h3>
-              {history.filter((item) => item.who === who).length ? (
-                history.filter((item) => item.who === who).map((item, index) => (
-                  <article key={`${item.date}-${index}`}>
-                    <b>{item.category} · exercice {item.exercise}</b>
-                    <strong className={item.score >= 70 ? 'good' : 'retry'}>{item.score}%</strong>
-                    <p>« {item.text} »</p>
-                    <small>{item.date}</small>
-                  </article>
-                ))
-              ) : <p>Aucun essai vocal.</p>}
+              <div className="target"><b>Réponse à prononcer</b><h3>{exercise[2]}</h3><p>Prononciation : {exercise[3]}</p></div>
+              <textarea value={text} onChange={(event) => { setText(event.target.value); setResult(null); }} placeholder="Répondez au micro ou écrivez ici…" />
+              <button className={`mic ${listening ? 'live' : ''}`} onClick={listen}>
+                {listening ? <MicOff /> : <Mic />}{listening ? ' Je vous écoute…' : ' Répondre au micro'}
+              </button>
+              {error && <p className="error">{error}</p>}
+              <button className="check" disabled={!text.trim()} onClick={() => saveAttempt(text)}>Corriger</button>
+              {result !== null && <div className="feedback">
+                <b className={result >= 70 ? 'good' : 'retry'}>{result}%</b>
+                <p>✅ Modèle : {exercise[2]}</p><p>🗣 Prononciation : {exercise[3]}</p>
+                <p>{result >= 85 ? 'Bravo, très bonne réponse.' : result >= 70 ? 'Bien joué. Répétez encore une fois.' : 'Reprenez lentement, mot par mot.'}</p>
+              </div>}
+              <div className="exerciseNav">
+                <button onClick={() => move(-1)}><ChevronLeft /> Précédent</button>
+                <button onClick={() => move(1)}>Suivant <ChevronRight /></button>
+              </div>
             </section>
-          </>
-        )}
+          </div>
+        </>}
+
+        {tab === 'progress' && <>
+          <h2>Progression de {who}</h2>
+          <div className="progress"><b>Expression orale</b><span>{user.oral}%</span><i><em style={{ width: `${user.oral}%` }} /></i></div>
+          <p>{doneCount} exercices réussis sur {totalExercises}.</p>
+          <section className="history"><h3>Historique oral</h3>
+            {history.length ? history.map((item, index) => (
+              <article key={`${item.date}-${index}`}>
+                <b>{item.category} · exercice {item.exercise}</b>
+                <strong className={item.score >= 70 ? 'good' : 'retry'}>{item.score}%</strong>
+                <p>« {item.text} »</p><small>{item.date}</small>
+              </article>
+            )) : <p>Aucun essai vocal.</p>}
+          </section>
+        </>}
       </main>
     </div>
   );
