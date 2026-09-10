@@ -1,1 +1,21 @@
-{"name":"Mi Español Niveau 2","short_name":"Mi Español","start_url":"/","display":"standalone","background_color":"#f7f5f2","theme_color":"#17251f","lang":"fr"}
+{
+  "name": "Mi Español",
+  "short_name": "Mi Español",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fff8e1",
+  "theme_color": "#c62828",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
