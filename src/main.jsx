@@ -4,14 +4,15 @@ import {
   Home, BookOpen, MessageCircle, Activity, Mic, MicOff, Volume2,
   Users, Stethoscope, Building2, ShieldCheck, HeartPulse, Landmark,
   Car, Flame, Sparkles, Award, ChevronLeft, ChevronRight, CheckCircle,
-  Target, Trophy
+  Target, Trophy, Shuffle, PenLine, ListChecks, Headphones, MessagesSquare
 } from 'lucide-react';
 import './style.css';
 
-const STORAGE_PREFIX = 'mi-espanol-v5-1';
-const OLD_STORAGE_PREFIX = 'mi-espanol-v4';
+const STORAGE_PREFIX = 'mi-espanol-v5-2';
+const PREVIOUS_PREFIXES = ['mi-espanol-v5-1', 'mi-espanol-v4'];
 const ACTIVE_PROFILE_KEY = `${STORAGE_PREFIX}-active-profile`;
 const PROFILE_NAMES = ['Patricia', 'Marie-Christine'];
+const DAILY_GOAL = 5;
 
 const PROFILE_SETTINGS = {
   Patricia: { startingLevel: 1, startingXp: 0 },
@@ -26,81 +27,14 @@ const LEVELS = [
   { level: 5, name: 'Prête pour l’Espagne', minXp: 3500 }
 ];
 
-const DAILY_GOAL = 5;
-
-const createDefaultProfile = (name) => {
-  const settings = PROFILE_SETTINGS[name] || PROFILE_SETTINGS.Patricia;
-  return {
-    version: 5.1,
-    stats: { xp: settings.startingXp, words: 0, oral: 0 },
-    completed: {},
-    history: [],
-    activityDates: [],
-    badges: []
-  };
-};
-
-function profileStorageKey(name, prefix = STORAGE_PREFIX) {
-  return `${prefix}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-}
-
-function mergeProfile(name, source) {
-  const defaults = createDefaultProfile(name);
-  const settings = PROFILE_SETTINGS[name] || PROFILE_SETTINGS.Patricia;
-  return {
-    ...defaults,
-    ...(source || {}),
-    version: 5.1,
-    stats: {
-      ...defaults.stats,
-      ...((source && source.stats) || {}),
-      xp: Math.max(settings.startingXp, Number(source?.stats?.xp || 0))
-    },
-    completed: source?.completed || {},
-    history: Array.isArray(source?.history) ? source.history : [],
-    activityDates: Array.isArray(source?.activityDates) ? source.activityDates : [],
-    badges: Array.isArray(source?.badges) ? source.badges : []
-  };
-}
-
-function loadProfile(name) {
-  try {
-    const current = localStorage.getItem(profileStorageKey(name));
-    if (current) return mergeProfile(name, JSON.parse(current));
-
-    const v4 = localStorage.getItem(profileStorageKey(name, OLD_STORAGE_PREFIX));
-    if (v4) {
-      const migrated = mergeProfile(name, JSON.parse(v4));
-      localStorage.setItem(profileStorageKey(name), JSON.stringify(migrated));
-      return migrated;
-    }
-
-    const oldUsers = JSON.parse(localStorage.getItem('mi-users-v3-1') || 'null');
-    const oldCompleted = JSON.parse(localStorage.getItem('mi-completed-v3-1') || 'null');
-    const oldHistory = JSON.parse(localStorage.getItem('mi-history-v3-1') || 'null');
-    const migrated = mergeProfile(name, {
-      stats: oldUsers?.[name] || {},
-      completed: oldCompleted?.[name] || {},
-      history: Array.isArray(oldHistory)
-        ? oldHistory.filter((item) => item.who === name)
-        : []
-    });
-    localStorage.setItem(profileStorageKey(name), JSON.stringify(migrated));
-    return migrated;
-  } catch (error) {
-    console.error('Chargement impossible :', error);
-    return createDefaultProfile(name);
-  }
-}
-
-function saveProfile(name, data) {
-  if (!name || !data) return;
-  try {
-    localStorage.setItem(profileStorageKey(name), JSON.stringify(data));
-  } catch (error) {
-    console.error('Sauvegarde impossible :', error);
-  }
-}
+const EXERCISE_TYPES = [
+  { id: 'qcm', label: 'QCM', icon: ListChecks },
+  { id: 'translation', label: 'Traduction', icon: PenLine },
+  { id: 'ordering', label: 'Mots mélangés', icon: Shuffle },
+  { id: 'fill', label: 'Phrase à compléter', icon: BookOpen },
+  { id: 'listening', label: 'Compréhension', icon: Headphones },
+  { id: 'dialogue', label: 'Dialogue', icon: MessagesSquare }
+];
 
 const catalog = {
   daily: {
@@ -233,22 +167,16 @@ const catalog = {
   }
 };
 
-const normalize = (value) => value
-  .toLowerCase()
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .replace(/[^a-zñ ]/g, ' ')
-  .replace(/\s+/g, ' ')
-  .trim();
+const normalize = (value = '') => value.toLowerCase().normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '').replace(/[^a-zñ0-9 ]/g, ' ')
+  .replace(/\s+/g, ' ').trim();
 
 function distance(a, b) {
   const left = normalize(a);
   const right = normalize(b);
-  const matrix = Array.from({ length: left.length + 1 }, () =>
-    Array(right.length + 1).fill(0)
-  );
-  for (let index = 0; index <= left.length; index += 1) matrix[index][0] = index;
-  for (let index = 0; index <= right.length; index += 1) matrix[0][index] = index;
+  const matrix = Array.from({ length: left.length + 1 }, () => Array(right.length + 1).fill(0));
+  for (let i = 0; i <= left.length; i += 1) matrix[i][0] = i;
+  for (let j = 0; j <= right.length; j += 1) matrix[0][j] = j;
   for (let i = 1; i <= left.length; i += 1) {
     for (let j = 1; j <= right.length; j += 1) {
       matrix[i][j] = Math.min(
@@ -261,9 +189,18 @@ function distance(a, b) {
   return matrix[left.length][right.length];
 }
 
-function calculateScore(a, b) {
-  const maxLength = Math.max(normalize(a).length, normalize(b).length, 1);
-  return Math.max(0, Math.round((1 - distance(a, b) / maxLength) * 100));
+function calculateScore(answer, expected) {
+  const maxLength = Math.max(normalize(answer).length, normalize(expected).length, 1);
+  return Math.max(0, Math.round((1 - distance(answer, expected) / maxLength) * 100));
+}
+
+function deterministicShuffle(values, seed = 1) {
+  const copy = [...values];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = (seed * 7 + i * 3) % (i + 1);
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
 }
 
 function speak(text, rate = 0.9) {
@@ -271,29 +208,76 @@ function speak(text, rate = 0.9) {
     alert('Lecture vocale non disponible sur ce navigateur.');
     return;
   }
-  window.speechSynthesis.cancel();
+  speechSynthesis.cancel();
   const voice = new SpeechSynthesisUtterance(text);
   voice.lang = 'es-ES';
   voice.rate = rate;
-  window.speechSynthesis.speak(voice);
+  speechSynthesis.speak(voice);
 }
 
 function localDateKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function storageKey(name, prefix = STORAGE_PREFIX) {
+  return `${prefix}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+function createDefaultProfile(name) {
+  return {
+    version: 5.2,
+    stats: { xp: PROFILE_SETTINGS[name]?.startingXp || 0, words: 0, oral: 0 },
+    completed: {}, history: [], activityDates: [], mistakes: {}
+  };
+}
+
+function mergeProfile(name, source = {}) {
+  const defaults = createDefaultProfile(name);
+  return {
+    ...defaults, ...source, version: 5.2,
+    stats: {
+      ...defaults.stats, ...(source.stats || {}),
+      xp: Math.max(defaults.stats.xp, Number(source.stats?.xp || 0))
+    },
+    completed: source.completed || {},
+    history: Array.isArray(source.history) ? source.history : [],
+    activityDates: Array.isArray(source.activityDates) ? source.activityDates : [],
+    mistakes: source.mistakes || {}
+  };
+}
+
+function loadProfile(name) {
+  try {
+    const current = localStorage.getItem(storageKey(name));
+    if (current) return mergeProfile(name, JSON.parse(current));
+    for (const prefix of PREVIOUS_PREFIXES) {
+      const saved = localStorage.getItem(storageKey(name, prefix));
+      if (saved) {
+        const migrated = mergeProfile(name, JSON.parse(saved));
+        localStorage.setItem(storageKey(name), JSON.stringify(migrated));
+        return migrated;
+      }
+    }
+    return createDefaultProfile(name);
+  } catch (error) {
+    console.error('Chargement impossible :', error);
+    return createDefaultProfile(name);
+  }
+}
+
+function saveProfile(name, data) {
+  try { localStorage.setItem(storageKey(name), JSON.stringify(data)); }
+  catch (error) { console.error('Sauvegarde impossible :', error); }
 }
 
 function getLevel(xp, name) {
-  const startingLevel = PROFILE_SETTINGS[name]?.startingLevel || 1;
+  const starting = PROFILE_SETTINGS[name]?.startingLevel || 1;
   const earned = [...LEVELS].reverse().find((item) => xp >= item.minXp)?.level || 1;
-  const number = Math.max(startingLevel, earned);
-  return LEVELS.find((item) => item.level === number) || LEVELS[0];
+  return LEVELS.find((item) => item.level === Math.max(starting, earned)) || LEVELS[0];
 }
 
-function calculateStreak(activityDates) {
-  const unique = new Set(activityDates || []);
+function calculateStreak(dates = []) {
+  const unique = new Set(dates);
   let cursor = new Date();
   let streak = 0;
   if (!unique.has(localDateKey(cursor))) cursor.setDate(cursor.getDate() - 1);
@@ -306,338 +290,241 @@ function calculateStreak(activityDates) {
 
 function getBadges(profile) {
   const count = Object.keys(profile.completed || {}).length;
-  const streak = calculateStreak(profile.activityDates);
   const badges = [];
   if (count >= 1) badges.push('Premier pas');
   if (count >= 10) badges.push('10 exercices réussis');
   if (count >= 25) badges.push('Exploratrice');
   if (count >= 50) badges.push('Grande voyageuse');
   if (profile.stats.oral >= 85) badges.push('Belle prononciation');
-  if (streak >= 3) badges.push('Série de 3 jours');
-  if (streak >= 7) badges.push('Semaine parfaite');
+  if (calculateStreak(profile.activityDates) >= 3) badges.push('Série de 3 jours');
   return badges;
 }
 
 function App() {
   const [who, setWho] = useState(() => localStorage.getItem(ACTIVE_PROFILE_KEY) || '');
   const [profileData, setProfileData] = useState(null);
-  const [profileLoaded, setProfileLoaded] = useState(false);
   const [tab, setTab] = useState('home');
   const [category, setCategory] = useState('daily');
   const [exerciseIndex, setExerciseIndex] = useState(0);
-  const [text, setText] = useState('');
+  const [type, setType] = useState('qcm');
+  const [answer, setAnswer] = useState('');
+  const [selectedWords, setSelectedWords] = useState([]);
   const [listening, setListening] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!who) {
-      setProfileData(null);
-      setProfileLoaded(false);
-      return;
-    }
-    setProfileLoaded(false);
+    if (!who) { setProfileData(null); return; }
     setProfileData(loadProfile(who));
     localStorage.setItem(ACTIVE_PROFILE_KEY, who);
-    setProfileLoaded(true);
   }, [who]);
 
   useEffect(() => {
-    if (who && profileData && profileLoaded) saveProfile(who, profileData);
-  }, [who, profileData, profileLoaded]);
+    if (who && profileData) saveProfile(who, profileData);
+  }, [who, profileData]);
 
   useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, []);
 
-  const Recognition = useMemo(
-    () => window.SpeechRecognition || window.webkitSpeechRecognition,
-    []
-  );
+  const Recognition = useMemo(() => window.SpeechRecognition || window.webkitSpeechRecognition, []);
 
-  function selectProfile(name) {
-    setProfileLoaded(false);
-    setProfileData(null);
-    setWho(name);
-  }
-
-  function resetAttempt() {
-    setText('');
+  function resetAttempt(nextType = type) {
+    setType(nextType);
+    setAnswer('');
+    setSelectedWords([]);
     setResult(null);
     setError('');
   }
 
   function changeProfile() {
     localStorage.removeItem(ACTIVE_PROFILE_KEY);
-    setWho('');
-    setProfileData(null);
-    setProfileLoaded(false);
-    setTab('home');
-    resetAttempt();
+    setWho(''); setProfileData(null); setTab('home'); resetAttempt('qcm');
   }
 
   if (!who) {
     return (
       <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: 'linear-gradient(135deg,#fff8e1,#ffe0b2)', fontFamily: 'Arial,sans-serif' }}>
         <section style={{ width: '100%', maxWidth: 520, padding: 32, background: '#fff', borderRadius: 24, textAlign: 'center', boxShadow: '0 12px 35px rgba(0,0,0,.12)' }}>
-          <div style={{ fontSize: 64 }}>🇪🇸</div>
-          <h1 style={{ color: '#c62828', marginBottom: 8 }}>Mi Español</h1>
-          <p style={{ color: '#555', fontSize: 18, marginBottom: 28 }}>Qui apprend aujourd’hui ?</p>
+          <div style={{ fontSize: 64 }}>🇪🇸</div><h1 style={{ color: '#c62828' }}>Mi Español</h1>
+          <p>Qui apprend aujourd’hui ?</p>
           <div style={{ display: 'grid', gap: 14 }}>
-            {PROFILE_NAMES.map((name) => (
-              <button key={name} type="button" onClick={() => selectProfile(name)} style={{ padding: 18, border: 0, borderRadius: 16, cursor: 'pointer', fontWeight: 700, fontSize: 18, background: '#f5f5f5', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }}>
-                👤 {name} · Niveau {PROFILE_SETTINGS[name].startingLevel}
-              </button>
-            ))}
+            {PROFILE_NAMES.map((name) => <button key={name} onClick={() => setWho(name)} style={{ padding: 18, border: 0, borderRadius: 16, fontWeight: 700, fontSize: 18 }}>👤 {name} · Niveau {PROFILE_SETTINGS[name].startingLevel}</button>)}
           </div>
-          <p style={{ marginTop: 24, color: '#777', fontSize: 14 }}>Même URL, progressions séparées, sans mot de passe</p>
         </section>
       </div>
     );
   }
 
-  if (!profileLoaded || !profileData) {
-    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>Chargement de la progression…</div>;
-  }
+  if (!profileData) return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>Chargement…</div>;
 
   const user = profileData.stats;
   const completed = profileData.completed;
   const history = profileData.history;
-  const categoryData = catalog[category];
-  const exercise = categoryData.items[exerciseIndex];
-  const exerciseKey = `${category}-${exerciseIndex}`;
-  const doneCount = Object.keys(completed).length;
-  const totalExercises = Object.values(catalog).reduce((sum, module) => sum + module.items.length, 0);
+  const module = catalog[category];
+  const item = module.items[exerciseIndex];
   const level = getLevel(user.xp, who);
   const streak = calculateStreak(profileData.activityDates);
   const badges = getBadges(profileData);
-  const nextLevel = LEVELS.find((item) => item.level === level.level + 1);
-  const levelProgress = nextLevel
-    ? Math.min(100, Math.round(((user.xp - level.minXp) / (nextLevel.minXp - level.minXp)) * 100))
-    : 100;
-  const today = localDateKey();
-  const todayAttempts = history.filter((item) => item.dayKey === today).length;
+  const completionKey = `${category}-${exerciseIndex}-${type}`;
+  const doneCount = Object.keys(completed).length;
+  const totalActivities = Object.values(catalog).reduce((sum, entry) => sum + entry.items.length * EXERCISE_TYPES.length, 0);
+  const todayAttempts = history.filter((entry) => entry.dayKey === localDateKey()).length;
   const dailyProgress = Math.min(DAILY_GOAL, todayAttempts);
+  const currentType = EXERCISE_TYPES.find((entry) => entry.id === type);
 
-  function isUnlocked(module) {
-    return level.level >= module.minLevel;
-  }
+  const options = useMemo(() => {
+    if (!module) return [];
+    const correct = type === 'listening' ? item[1] : item[2];
+    const candidates = module.items.map((entry) => type === 'listening' ? entry[1] : entry[2]).filter((value) => value !== correct);
+    return deterministicShuffle([correct, ...deterministicShuffle(candidates, exerciseIndex + 3).slice(0, 3)], exerciseIndex + type.length);
+  }, [category, exerciseIndex, type]);
 
-  function openExercise(categoryId, index = 0) {
+  const orderedWords = useMemo(() => deterministicShuffle(item[2].replace(/[.,¿?¡!]/g, '').split(/\s+/), exerciseIndex + 8), [category, exerciseIndex]);
+  const fillWords = item[2].replace(/[.,¿?¡!]/g, '').split(/\s+/);
+  const missingIndex = Math.min(1, fillWords.length - 1);
+  const missingWord = fillWords[missingIndex] || '';
+  const fillSentence = item[2].replace(missingWord, '_____');
+
+  function isUnlocked(entry) { return level.level >= entry.minLevel; }
+
+  function openExercise(categoryId, index = 0, requestedType = type) {
     if (!isUnlocked(catalog[categoryId])) {
-      alert(`Ce thème se débloque au niveau ${catalog[categoryId].minLevel}.`);
-      return;
+      alert(`Ce thème se débloque au niveau ${catalog[categoryId].minLevel}.`); return;
     }
-    setCategory(categoryId);
-    setExerciseIndex(index);
-    resetAttempt();
-    setTab('talk');
+    setCategory(categoryId); setExerciseIndex(index); resetAttempt(requestedType); setTab('practice');
   }
 
-  function move(delta) {
-    const length = categoryData.items.length;
-    setExerciseIndex((exerciseIndex + delta + length) % length);
-    resetAttempt();
+  function expectedAnswer() {
+    if (type === 'ordering') return item[2].replace(/[.,¿?¡!]/g, '');
+    if (type === 'fill') return missingWord;
+    if (type === 'listening') return item[1];
+    return item[2];
   }
 
-  function saveAttempt(answer) {
-    const value = calculateScore(answer, exercise[2]);
-    setResult(value);
+  function submit(value = answer) {
+    const expected = expectedAnswer();
+    const score = calculateScore(value, expected);
+    const success = score >= 70;
+    setAnswer(value); setResult(score);
     setProfileData((current) => {
-      const firstSuccess = value >= 70 && !current.completed[exerciseKey];
-      const currentDoneCount = Object.keys(current.completed || {}).length;
+      const firstSuccess = success && !current.completed[completionKey];
       const dayKey = localDateKey();
       return {
         ...current,
         stats: {
           ...current.stats,
-          xp: current.stats.xp + (value >= 70 ? 15 : 5),
-          words: current.stats.words + (firstSuccess ? normalize(exercise[2]).split(' ').length : 0),
-          oral: Math.min(100, Math.round(((current.stats.oral * Math.max(currentDoneCount, 1)) + value) / (Math.max(currentDoneCount, 1) + 1)))
+          xp: current.stats.xp + (success ? 15 : 5),
+          words: current.stats.words + (firstSuccess ? normalize(expected).split(' ').length : 0),
+          oral: type === 'dialogue'
+            ? Math.round((current.stats.oral + score) / (current.stats.oral ? 2 : 1))
+            : current.stats.oral
         },
-        completed: value >= 70
-          ? { ...current.completed, [exerciseKey]: true }
-          : current.completed,
+        completed: success ? { ...current.completed, [completionKey]: true } : current.completed,
+        mistakes: success
+          ? { ...current.mistakes, [completionKey]: Math.max(0, (current.mistakes[completionKey] || 0) - 1) }
+          : { ...current.mistakes, [completionKey]: (current.mistakes[completionKey] || 0) + 1 },
         activityDates: Array.from(new Set([...(current.activityDates || []), dayKey])),
-        history: [
-          {
-            who,
-            category: categoryData.title,
-            exercise: exerciseIndex + 1,
-            text: answer,
-            score: value,
-            date: new Date().toLocaleDateString('fr-FR'),
-            dayKey
-          },
-          ...current.history
-        ].slice(0, 100)
+        history: [{ category: module.title, exercise: exerciseIndex + 1, type: currentType.label, text: value, score, date: new Date().toLocaleDateString('fr-FR'), dayKey }, ...current.history].slice(0, 120)
       };
     });
   }
 
-  function listen() {
-    setError('');
-    if (!Recognition) {
-      setError('Reconnaissance vocale indisponible. Vous pouvez écrire votre réponse dans la zone prévue.');
-      return;
-    }
+  function move(delta) {
+    const next = (exerciseIndex + delta + module.items.length) % module.items.length;
+    setExerciseIndex(next);
+    resetAttempt(EXERCISE_TYPES[next % EXERCISE_TYPES.length].id);
+  }
+
+  function addWord(word, index) {
+    const next = [...selectedWords, { word, index }];
+    setSelectedWords(next);
+    setAnswer(next.map((entry) => entry.word).join(' '));
+  }
+
+  function removeWord(position) {
+    const next = selectedWords.filter((_, index) => index !== position);
+    setSelectedWords(next); setAnswer(next.map((entry) => entry.word).join(' '));
+  }
+
+  function startRecognition() {
+    if (!Recognition) { setError('Reconnaissance vocale indisponible. Écrivez votre réponse.'); return; }
     const recognition = new Recognition();
-    recognition.lang = 'es-ES';
-    recognition.interimResults = false;
-    recognition.continuous = false;
-    recognition.onstart = () => { setListening(true); setResult(null); };
+    recognition.lang = 'es-ES'; recognition.interimResults = false;
+    recognition.onstart = () => { setListening(true); setError(''); };
     recognition.onend = () => setListening(false);
-    recognition.onerror = (event) => {
-      setListening(false);
-      setError(event.error === 'not-allowed'
-        ? 'Autorisez le micro dans les réglages du navigateur.'
-        : 'Je n’ai pas compris. Réessayez lentement.');
-    };
-    recognition.onresult = (event) => {
-      const answer = event.results[0][0].transcript;
-      setText(answer);
-      saveAttempt(answer);
-    };
+    recognition.onerror = () => { setListening(false); setError('Je n’ai pas compris. Réessayez lentement.'); };
+    recognition.onresult = (event) => { const value = event.results[0][0].transcript; setAnswer(value); submit(value); };
     recognition.start();
   }
 
-  return (
-    <div className="app">
-      <aside>
-        <h2>🇪🇸 Mi Español</h2>
-        {[
-          ['home', 'Accueil', Home], ['path', 'Parcours', BookOpen],
-          ['talk', 'Coach vocal', MessageCircle], ['progress', 'Progression', Activity]
-        ].map(([id, label, Icon]) => (
-          <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
-            <Icon /> {label}
-          </button>
-        ))}
-      </aside>
+  function renderExercise() {
+    if (type === 'qcm') return <>
+      <p>Choisissez la bonne réponse en espagnol :</p><h3>{item[1]}</h3>
+      <div className="pills">{options.map((option) => <button key={option} onClick={() => submit(option)}>{option}</button>)}</div>
+    </>;
 
-      <main>
-        <header>
-          <div><small>¡Buenos días, {who}!</small><h1>Objectif Espagne</h1></div>
-          <div className="profiles">
-            <strong>👤 {who} · Niveau {level.level}</strong>
-            <button type="button" onClick={changeProfile}>Changer de profil</button>
-          </div>
-        </header>
+    if (type === 'translation') return <>
+      <p>Traduisez en espagnol :</p><h3>{item[1]}</h3>
+      <textarea value={answer} onChange={(event) => { setAnswer(event.target.value); setResult(null); }} placeholder="Écrivez la traduction…" />
+      <button className="check" disabled={!answer.trim()} onClick={() => submit()}>Corriger</button>
+    </>;
 
-        {tab === 'home' && <>
-          <section className="hero">
-            <h2>Parler en Espagne, pour de vrai.</h2>
-            <p>{totalExercises} exercices pratiques avec entraînement vocal et progression individuelle.</p>
-            <button onClick={() => openExercise(who === 'Marie-Christine' ? 'admin' : 'daily')}>🎤 Continuer à apprendre</button>
-          </section>
+    if (type === 'ordering') return <>
+      <p>Remettez les mots dans le bon ordre :</p><h3>{item[1]}</h3>
+      <div className="target"><p>{selectedWords.length ? selectedWords.map((entry, index) => <button key={`${entry.index}-${index}`} onClick={() => removeWord(index)}>{entry.word}</button>) : 'Touchez les mots ci-dessous'}</p></div>
+      <div className="pills">{orderedWords.map((word, index) => <button key={`${word}-${index}`} disabled={selectedWords.some((entry) => entry.index === index)} onClick={() => addWord(word, index)}>{word}</button>)}</div>
+      <button className="check" disabled={!answer.trim()} onClick={() => submit()}>Corriger</button>
+    </>;
 
-          <div className="stats">
-            <article><Flame /><b>{streak}</b><span>Jours de série</span></article>
-            <article><Sparkles /><b>{user.xp}</b><span>XP</span></article>
-            <article><Award /><b>Niveau {level.level}</b><span>{level.name}</span></article>
-            <article><CheckCircle /><b>{doneCount}/{totalExercises}</b><span>Réussis</span></article>
-          </div>
+    if (type === 'fill') return <>
+      <p>Complétez la phrase :</p><h3>{fillSentence}</h3><p>{item[1]}</p>
+      <input value={answer} onChange={(event) => { setAnswer(event.target.value); setResult(null); }} placeholder="Mot manquant" style={{ width: '100%', padding: 14, borderRadius: 12, border: '1px solid #ddd', marginBottom: 12 }} />
+      <button className="check" disabled={!answer.trim()} onClick={() => submit()}>Corriger</button>
+    </>;
 
-          <section className="hero" style={{ marginTop: 20 }}>
-            <h3><Target /> Défi du jour</h3>
-            <p>Réaliser {DAILY_GOAL} exercices. Progression : {dailyProgress}/{DAILY_GOAL}</p>
-            <div className="progress"><i><em style={{ width: `${Math.round((dailyProgress / DAILY_GOAL) * 100)}%` }} /></i></div>
-            <p>{dailyProgress >= DAILY_GOAL ? '🏆 Défi relevé ! Vous pouvez continuer autant que vous voulez.' : 'Chaque essai compte. Aucune limite quotidienne.'}</p>
-          </section>
-        </>}
+    if (type === 'listening') return <>
+      <p>Écoutez puis choisissez la bonne signification :</p>
+      <button className="listen" onClick={() => speak(item[2], 0.85)}><Volume2 /> Écouter la phrase</button>
+      <div className="pills">{options.map((option) => <button key={option} onClick={() => submit(option)}>{option}</button>)}</div>
+    </>;
 
-        {tab === 'path' && <>
-          <h2>Parcours Vie en Espagne</h2>
-          <div className="grid">
-            {Object.entries(catalog).map(([id, module]) => {
-              const Icon = module.icon;
-              const count = module.items.filter((_, index) => completed[`${id}-${index}`]).length;
-              const unlocked = isUnlocked(module);
-              return <article key={id} onClick={() => openExercise(id)} style={{ opacity: unlocked ? 1 : 0.55, cursor: unlocked ? 'pointer' : 'not-allowed' }}>
-                <Icon /><h3>{module.title}</h3><p>{module.description}</p>
-                <strong>{unlocked ? `${count}/${module.items.length} exercices réussis` : `🔒 Niveau ${module.minLevel} requis`}</strong>
-              </article>;
-            })}
-          </div>
-        </>}
+    return <>
+      <p>Répondez dans ce dialogue :</p><h3>{item[0]}</h3><p>{item[1]}</p>
+      <div className="audio"><button className="listen" onClick={() => speak(item[0], 0.8)}><Volume2 /> Écouter</button></div>
+      <textarea value={answer} onChange={(event) => { setAnswer(event.target.value); setResult(null); }} placeholder="Répondez en espagnol…" />
+      <button className={`mic ${listening ? 'live' : ''}`} onClick={startRecognition}>{listening ? <MicOff /> : <Mic />} {listening ? 'Je vous écoute…' : 'Répondre au micro'}</button>
+      {error && <p className="error">{error}</p>}
+      <button className="check" disabled={!answer.trim()} onClick={() => submit()}>Corriger</button>
+    </>;
+  }
 
-        {tab === 'talk' && <>
-          <h2>Coach vocal</h2>
-          <div className="pills">
-            {Object.entries(catalog).map(([id, module]) => (
-              <button key={id} disabled={!isUnlocked(module)} className={category === id ? 'on' : ''} onClick={() => openExercise(id)}>
-                {module.title.replace(/^\d+\. /, '')}{!isUnlocked(module) ? ' 🔒' : ''}
-              </button>
-            ))}
-          </div>
-          <div className="conversationLayout">
-            <div className="exerciseList">
-              <h3>{categoryData.title}</h3>
-              {categoryData.items.map((item, index) => (
-                <button key={index} className={`${exerciseIndex === index ? 'on' : ''} ${completed[`${category}-${index}`] ? 'done' : ''}`} onClick={() => openExercise(category, index)}>
-                  {index + 1}. {item[1]}
-                </button>
-              ))}
-            </div>
-            <section className="coach lesson">
-              <p><b>Exercice {exerciseIndex + 1} / {categoryData.items.length}</b></p>
-              <h3>{exercise[0]}</h3><p>{exercise[1]}</p>
-              <div className="audio">
-                <button className="listen" onClick={() => speak(exercise[0], 0.7)}><Volume2 /> Lent</button>
-                <button className="listen" onClick={() => speak(exercise[0], 1)}><Volume2 /> Normal</button>
-              </div>
-              <div className="target"><b>Réponse à prononcer</b><h3>{exercise[2]}</h3><p>Prononciation : {exercise[3]}</p></div>
-              <textarea value={text} onChange={(event) => { setText(event.target.value); setResult(null); }} placeholder="Répondez au micro ou écrivez ici…" />
-              <button className={`mic ${listening ? 'live' : ''}`} onClick={listen}>
-                {listening ? <MicOff /> : <Mic />}{listening ? ' Je vous écoute…' : ' Répondre au micro'}
-              </button>
-              {error && <p className="error">{error}</p>}
-              <button className="check" disabled={!text.trim()} onClick={() => saveAttempt(text)}>Corriger</button>
-              {result !== null && <div className="feedback">
-                <b className={result >= 70 ? 'good' : 'retry'}>{result}%</b>
-                <p>✅ Modèle : {exercise[2]}</p><p>🗣 Prononciation : {exercise[3]}</p>
-                <p>{result >= 85 ? 'Bravo, très bonne réponse.' : result >= 70 ? 'Bien joué. Répétez encore une fois.' : 'Reprenez lentement, mot par mot.'}</p>
-              </div>}
-              <div className="exerciseNav">
-                <button onClick={() => move(-1)}><ChevronLeft /> Précédent</button>
-                <button onClick={() => move(1)}>Suivant <ChevronRight /></button>
-              </div>
-            </section>
-          </div>
-        </>}
+  return <div className="app">
+    <aside><h2>🇪🇸 Mi Español</h2>{[
+      ['home', 'Accueil', Home], ['path', 'Parcours', BookOpen],
+      ['practice', 'Exercices', MessageCircle], ['progress', 'Progression', Activity]
+    ].map(([id, label, Icon]) => <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}><Icon /> {label}</button>)}</aside>
 
-        {tab === 'progress' && <>
-          <h2>Progression de {who}</h2>
-          <div className="stats">
-            <article><Award /><b>Niveau {level.level}</b><span>{level.name}</span></article>
-            <article><Sparkles /><b>{user.xp}</b><span>XP</span></article>
-            <article><Flame /><b>{streak}</b><span>Jours</span></article>
-            <article><Trophy /><b>{badges.length}</b><span>Badges</span></article>
-          </div>
-          <div className="progress"><b>Vers le niveau suivant</b><span>{levelProgress}%</span><i><em style={{ width: `${levelProgress}%` }} /></i></div>
-          <div className="progress"><b>Expression orale</b><span>{user.oral}%</span><i><em style={{ width: `${user.oral}%` }} /></i></div>
-          <p>{doneCount} exercices réussis sur {totalExercises}.</p>
+    <main><header><div><small>¡Buenos días, {who}!</small><h1>Objectif Espagne</h1></div><div className="profiles"><strong>👤 {who} · Niveau {level.level}</strong><button onClick={changeProfile}>Changer de profil</button></div></header>
 
-          <section className="history">
-            <h3>🏆 Badges</h3>
-            {badges.length ? badges.map((badge) => <article key={badge}><b>{badge}</b></article>) : <p>Le premier badge arrivera dès le premier exercice réussi.</p>}
-          </section>
+      {tab === 'home' && <><section className="hero"><h2>Six façons d’apprendre, sans limite quotidienne.</h2><p>QCM, traduction, mots mélangés, phrase à compléter, compréhension et dialogue.</p><button onClick={() => openExercise(who === 'Marie-Christine' ? 'admin' : 'daily', 0, 'qcm')}>Commencer</button></section>
+      <div className="stats"><article><Flame /><b>{streak}</b><span>Jours</span></article><article><Sparkles /><b>{user.xp}</b><span>XP</span></article><article><Award /><b>Niveau {level.level}</b><span>{level.name}</span></article><article><CheckCircle /><b>{doneCount}/{totalActivities}</b><span>Activités</span></article></div>
+      <section className="hero" style={{ marginTop: 20 }}><h3><Target /> Défi du jour : {dailyProgress}/{DAILY_GOAL}</h3><div className="progress"><i><em style={{ width: `${dailyProgress / DAILY_GOAL * 100}%` }} /></i></div><p>{dailyProgress >= DAILY_GOAL ? '🏆 Défi réussi. Continuez autant que vous voulez.' : 'Chaque activité fait progresser le défi.'}</p></section></>}
 
-          <section className="history"><h3>Historique oral</h3>
-            {history.length ? history.map((item, index) => (
-              <article key={`${item.date}-${index}`}>
-                <b>{item.category} · exercice {item.exercise}</b>
-                <strong className={item.score >= 70 ? 'good' : 'retry'}>{item.score}%</strong>
-                <p>« {item.text} »</p><small>{item.date}</small>
-              </article>
-            )) : <p>Aucun essai vocal.</p>}
-          </section>
-        </>}
-      </main>
-    </div>
-  );
+      {tab === 'path' && <><h2>Parcours Vie en Espagne</h2><div className="grid">{Object.entries(catalog).map(([id, entry]) => { const Icon = entry.icon; const unlocked = isUnlocked(entry); const count = Object.keys(completed).filter((key) => key.startsWith(`${id}-`)).length; return <article key={id} onClick={() => openExercise(id, 0, 'qcm')} style={{ opacity: unlocked ? 1 : .5 }}><Icon /><h3>{entry.title}</h3><p>{entry.description}</p><strong>{unlocked ? `${count}/${entry.items.length * 6} activités` : `🔒 Niveau ${entry.minLevel}`}</strong></article>; })}</div></>}
+
+      {tab === 'practice' && <><h2>{currentType.icon && React.createElement(currentType.icon)} {currentType.label}</h2>
+        <div className="pills">{EXERCISE_TYPES.map((entry) => <button key={entry.id} className={type === entry.id ? 'on' : ''} onClick={() => resetAttempt(entry.id)}>{entry.label}</button>)}</div>
+        <div className="pills">{Object.entries(catalog).map(([id, entry]) => <button key={id} disabled={!isUnlocked(entry)} className={category === id ? 'on' : ''} onClick={() => openExercise(id, 0, type)}>{entry.title.replace(/^\d+\. /, '')}{!isUnlocked(entry) ? ' 🔒' : ''}</button>)}</div>
+        <section className="coach lesson"><p><b>{module.title} · exercice {exerciseIndex + 1}/{module.items.length}</b></p>{renderExercise()}
+        {result !== null && <div className="feedback"><b className={result >= 70 ? 'good' : 'retry'}>{result}%</b><p>Réponse attendue : {expectedAnswer()}</p><p>{result >= 85 ? 'Excellent !' : result >= 70 ? 'Bien joué.' : 'À revoir. Cet exercice reviendra dans les révisions.'}</p></div>}
+        <div className="exerciseNav"><button onClick={() => move(-1)}><ChevronLeft /> Précédent</button><button onClick={() => move(1)}>Suivant <ChevronRight /></button></div></section></>}
+
+      {tab === 'progress' && <><h2>Progression de {who}</h2><div className="stats"><article><Award /><b>Niveau {level.level}</b><span>{level.name}</span></article><article><Sparkles /><b>{user.xp}</b><span>XP</span></article><article><Flame /><b>{streak}</b><span>Jours</span></article><article><Trophy /><b>{badges.length}</b><span>Badges</span></article></div>
+      <section className="history"><h3>🏆 Badges</h3>{badges.length ? badges.map((badge) => <article key={badge}><b>{badge}</b></article>) : <p>Le premier badge arrivera après une activité réussie.</p>}</section>
+      <section className="history"><h3>Historique</h3>{history.length ? history.map((entry, index) => <article key={`${entry.date}-${index}`}><b>{entry.category} · {entry.type}</b><strong className={entry.score >= 70 ? 'good' : 'retry'}>{entry.score}%</strong><p>« {entry.text} »</p><small>{entry.date}</small></article>) : <p>Aucune activité.</p>}</section></>}
+    </main>
+  </div>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
