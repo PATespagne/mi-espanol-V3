@@ -1,11 +1,15 @@
 {
+  "id": "/",
   "name": "Mi Español",
   "short_name": "Mi Español",
+  "description": "Apprendre l'espagnol pour vivre en Espagne",
+  "lang": "fr",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#fff8e1",
   "theme_color": "#c62828",
-  "orientation": "portrait",
+  "orientation": "any",
   "icons": [
     {
       "src": "/icon-192.png",
