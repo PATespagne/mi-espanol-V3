@@ -54,7 +54,7 @@ function App() {
   useEffect(() => { if (profile) localStorage.setItem('me-profile', profile); }, [profile]);
 
   useEffect(() => {
-    fetch('/api/speech')
+    fetch('/api/speech-token')
       .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
       .then((data) => setAzureReady(Boolean(data.token && data.region)))
       .catch(() => setAzureReady(false));
