@@ -7,16 +7,61 @@ import {
 } from 'lucide-react';
 import './style.css';
 
-const STORAGE_PREFIX = 'mi-espanol-v4';
+const STORAGE_PREFIX = 'mi-espanol-v5';
 const ACTIVE_PROFILE_KEY = `${STORAGE_PREFIX}-active-profile`;
 const PROFILE_NAMES = ['Patricia', 'Marie-Christine'];
 
-const createDefaultProfile = () => ({
-  version: 4,
-  stats: { xp: 0, words: 0, oral: 0 },
+const createDefaultProfile = (name = 'Patricia') => ({
+  version: 5,
+  stats: {
+    xp: name === 'Marie-Christine' ? 1000 : 0,
+    words: 0,
+    oral: 0,
+    streak: 0,
+    lastActivityDate: null,
+    dailyDate: null,
+    dailyCount: 0
+  },
   completed: {},
-  history: []
+  history: [],
+  badges: []
 });
+
+const LEVELS = [
+  { level: 1, label: 'Débutante', minXp: 0 },
+  { level: 2, label: 'Exploratrice', minXp: 300 },
+  { level: 3, label: 'Vie quotidienne', minXp: 1000 },
+  { level: 4, label: 'Installation en Espagne', minXp: 2000 },
+  { level: 5, label: 'Autonome', minXp: 3500 }
+];
+
+function getLevel(name, xp) {
+  const earned = [...LEVELS].reverse().find((item) => xp >= item.minXp) || LEVELS[0];
+  if (name === 'Marie-Christine' && earned.level < 3) return LEVELS[2];
+  return earned;
+}
+
+function localDay(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function previousLocalDay() {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  return localDay(date);
+}
+
+function earnedBadges(stats, completedCount) {
+  const badges = [];
+  if (completedCount >= 1) badges.push('Premier pas');
+  if (completedCount >= 10) badges.push('10 exercices réussis');
+  if (completedCount >= 40) badges.push('Cap des 40');
+  if (stats.streak >= 3) badges.push('Série de 3 jours');
+  if (stats.streak >= 7) badges.push('Série de 7 jours');
+  if (stats.oral >= 80) badges.push('Belle prononciation');
+  if (stats.xp >= 1000) badges.push('Niveau 3 atteint');
+  return badges;
+}
 
 function profileStorageKey(name) {
   return `${STORAGE_PREFIX}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
@@ -28,11 +73,12 @@ function loadProfile(name) {
     if (saved) {
       const parsed = JSON.parse(saved);
       return {
-        ...createDefaultProfile(),
+        ...createDefaultProfile(name),
         ...parsed,
-        stats: { ...createDefaultProfile().stats, ...(parsed.stats || {}) },
+        stats: { ...createDefaultProfile(name).stats, ...(parsed.stats || {}) },
         completed: parsed.completed || {},
-        history: Array.isArray(parsed.history) ? parsed.history : []
+        history: Array.isArray(parsed.history) ? parsed.history : [],
+        badges: Array.isArray(parsed.badges) ? parsed.badges : []
       };
     }
 
@@ -41,8 +87,8 @@ function loadProfile(name) {
     const oldCompleted = JSON.parse(localStorage.getItem('mi-completed-v3-1') || 'null');
     const oldHistory = JSON.parse(localStorage.getItem('mi-history-v3-1') || 'null');
     const migrated = {
-      ...createDefaultProfile(),
-      stats: { ...createDefaultProfile().stats, ...(oldUsers?.[name] || {}) },
+      ...createDefaultProfile(name),
+      stats: { ...createDefaultProfile(name).stats, ...(oldUsers?.[name] || {}) },
       completed: oldCompleted?.[name] || {},
       history: Array.isArray(oldHistory) ? oldHistory.filter((item) => item.who === name) : []
     };
@@ -50,7 +96,7 @@ function loadProfile(name) {
     return migrated;
   } catch (error) {
     console.error('Chargement impossible :', error);
-    return createDefaultProfile();
+    return createDefaultProfile(name);
   }
 }
 
@@ -323,6 +369,13 @@ function App() {
   const exerciseKey = `${category}-${exerciseIndex}`;
   const doneCount = Object.keys(completed).length;
   const totalExercises = Object.values(catalog).reduce((sum, module) => sum + module.items.length, 0);
+  const level = getLevel(who, user.xp);
+  const nextLevel = LEVELS.find((item) => item.level === level.level + 1);
+  const levelProgress = nextLevel
+    ? Math.min(100, Math.round(((user.xp - level.minXp) / (nextLevel.minXp - level.minXp)) * 100))
+    : 100;
+  const dailyGoal = 5;
+  const badges = earnedBadges(user, doneCount);
 
   function resetAttempt() {
     setText('');
@@ -344,25 +397,40 @@ function App() {
   }
 
   function saveAttempt(answer) {
+    if (!answer.trim() || result !== null) return;
     const value = calculateScore(answer, exercise[2]);
     const firstSuccess = value >= 70 && !completed[exerciseKey];
+    const today = localDay();
     setResult(value);
-    setProfileData((current) => ({
-      ...current,
-      stats: {
+    setProfileData((current) => {
+      const alreadyActiveToday = current.stats.lastActivityDate === today;
+      const continuesStreak = current.stats.lastActivityDate === previousLocalDay();
+      const successfulToday = current.stats.dailyDate === today ? current.stats.dailyCount : 0;
+      const nextCompleted = value >= 70
+        ? { ...current.completed, [exerciseKey]: true }
+        : current.completed;
+      const nextStats = {
         ...current.stats,
         xp: current.stats.xp + (value >= 70 ? 15 : 5),
         words: current.stats.words + (firstSuccess ? normalize(exercise[2]).split(' ').length : 0),
-        oral: Math.min(100, Math.round(((current.stats.oral * Math.max(doneCount, 1)) + value) / (Math.max(doneCount, 1) + 1)))
-      },
-      completed: value >= 70
-        ? { ...current.completed, [exerciseKey]: true }
-        : current.completed,
-      history: [
-        { who, category: categoryData.title, exercise: exerciseIndex + 1, text: answer, score: value, date: new Date().toLocaleDateString('fr-FR') },
-        ...current.history
-      ].slice(0, 60)
-    }));
+        oral: Math.min(100, Math.round(((current.stats.oral * Math.max(current.history.length, 1)) + value) / (Math.max(current.history.length, 1) + 1))),
+        streak: alreadyActiveToday ? current.stats.streak : (continuesStreak ? current.stats.streak + 1 : 1),
+        lastActivityDate: today,
+        dailyDate: today,
+        dailyCount: successfulToday + (value >= 70 ? 1 : 0)
+      };
+      return {
+        ...current,
+        version: 5,
+        stats: nextStats,
+        completed: nextCompleted,
+        badges: earnedBadges(nextStats, Object.keys(nextCompleted).length),
+        history: [
+          { who, category: categoryData.title, exercise: exerciseIndex + 1, text: answer, score: value, date: new Date().toLocaleDateString('fr-FR') },
+          ...current.history
+        ].slice(0, 60)
+      };
+    });
   }
 
   function listen() {
@@ -405,7 +473,7 @@ function App() {
 
       <main>
         <header>
-          <div><small>¡Buenos días, {who}!</small><h1>Objectif Espagne</h1></div>
+          <div><small>¡Buenos días, {who}!</small><h1>Objectif Espagne</h1><p style={{ margin: 0, color: '#666' }}>Niveau {level.level} · {level.label}</p></div>
           <div className="profiles">
             <strong>👤 {who}</strong>
             <button type="button" onClick={changeProfile}>Changer de profil</button>
@@ -419,11 +487,17 @@ function App() {
             <button onClick={() => openExercise('daily')}>🎤 Commencer à parler</button>
           </section>
           <div className="stats">
-            <article><Flame /><b>{user.xp}</b><span>XP</span></article>
+            <article><Flame /><b>{user.streak || 0}</b><span>Jours de série</span></article>
+            <article><Sparkles /><b>{user.xp}</b><span>XP</span></article>
             <article><Sparkles /><b>{user.words}</b><span>Mots</span></article>
             <article><Award /><b>{user.oral}%</b><span>Oral</span></article>
             <article><CheckCircle /><b>{doneCount}/{totalExercises}</b><span>Réussis</span></article>
           </div>
+          <section className="hero" style={{ marginTop: 18 }}>
+            <h3>🎯 Défi du jour</h3>
+            <p>{Math.min(user.dailyDate === localDay() ? user.dailyCount : 0, dailyGoal)} / {dailyGoal} exercices réussis aujourd’hui</p>
+            <div className="progress"><i><em style={{ width: `${Math.min(100, ((user.dailyDate === localDay() ? user.dailyCount : 0) / dailyGoal) * 100)}%` }} /></i></div>
+          </section>
         </>}
 
         {tab === 'path' && <>
@@ -469,7 +543,7 @@ function App() {
                 {listening ? <MicOff /> : <Mic />}{listening ? ' Je vous écoute…' : ' Répondre au micro'}
               </button>
               {error && <p className="error">{error}</p>}
-              <button className="check" disabled={!text.trim()} onClick={() => saveAttempt(text)}>Corriger</button>
+              <button className="check" disabled={!text.trim() || result !== null} onClick={() => saveAttempt(text)}>{result !== null ? 'Réponse enregistrée' : 'Corriger'}</button>
               {result !== null && <div className="feedback">
                 <b className={result >= 70 ? 'good' : 'retry'}>{result}%</b>
                 <p>✅ Modèle : {exercise[2]}</p><p>🗣 Prononciation : {exercise[3]}</p>
@@ -487,6 +561,10 @@ function App() {
           <h2>Progression de {who}</h2>
           <div className="progress"><b>Expression orale</b><span>{user.oral}%</span><i><em style={{ width: `${user.oral}%` }} /></i></div>
           <p>{doneCount} exercices réussis sur {totalExercises}.</p>
+          <div className="progress"><b>Niveau {level.level} · {level.label}</b><span>{levelProgress}%</span><i><em style={{ width: `${levelProgress}%` }} /></i></div>
+          <section className="history"><h3>Badges</h3>
+            {badges.length ? badges.map((badge) => <article key={badge}><b>🏆 {badge}</b></article>) : <p>Ton premier badge arrive après le premier exercice réussi.</p>}
+          </section>
           <section className="history"><h3>Historique oral</h3>
             {history.length ? history.map((item, index) => (
               <article key={`${item.date}-${index}`}>
