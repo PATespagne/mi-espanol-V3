@@ -3,95 +3,88 @@ import { createRoot } from 'react-dom/client';
 import {
   Home, BookOpen, MessageCircle, Activity, Mic, MicOff, Volume2,
   Users, Stethoscope, Building2, ShieldCheck, HeartPulse, Landmark,
-  Car, Flame, Sparkles, Award, ChevronLeft, ChevronRight, CheckCircle
+  Car, Flame, Sparkles, Award, ChevronLeft, ChevronRight, CheckCircle,
+  Target, Trophy
 } from 'lucide-react';
 import './style.css';
 
-const STORAGE_PREFIX = 'mi-espanol-v5';
+const STORAGE_PREFIX = 'mi-espanol-v5-1';
+const OLD_STORAGE_PREFIX = 'mi-espanol-v4';
 const ACTIVE_PROFILE_KEY = `${STORAGE_PREFIX}-active-profile`;
 const PROFILE_NAMES = ['Patricia', 'Marie-Christine'];
 
-const createDefaultProfile = (name = 'Patricia') => ({
-  version: 5,
-  stats: {
-    xp: name === 'Marie-Christine' ? 1000 : 0,
-    words: 0,
-    oral: 0,
-    streak: 0,
-    lastActivityDate: null,
-    dailyDate: null,
-    dailyCount: 0
-  },
-  completed: {},
-  history: [],
-  badges: []
-});
+const PROFILE_SETTINGS = {
+  Patricia: { startingLevel: 1, startingXp: 0 },
+  'Marie-Christine': { startingLevel: 3, startingXp: 1000 }
+};
 
 const LEVELS = [
-  { level: 1, label: 'Débutante', minXp: 0 },
-  { level: 2, label: 'Exploratrice', minXp: 300 },
-  { level: 3, label: 'Vie quotidienne', minXp: 1000 },
-  { level: 4, label: 'Installation en Espagne', minXp: 2000 },
-  { level: 5, label: 'Autonome', minXp: 3500 }
+  { level: 1, name: 'Débutante', minXp: 0 },
+  { level: 2, name: 'Exploratrice', minXp: 350 },
+  { level: 3, name: 'Vie quotidienne', minXp: 1000 },
+  { level: 4, name: 'Autonome', minXp: 2000 },
+  { level: 5, name: 'Prête pour l’Espagne', minXp: 3500 }
 ];
 
-function getLevel(name, xp) {
-  const earned = [...LEVELS].reverse().find((item) => xp >= item.minXp) || LEVELS[0];
-  if (name === 'Marie-Christine' && earned.level < 3) return LEVELS[2];
-  return earned;
+const DAILY_GOAL = 5;
+
+const createDefaultProfile = (name) => {
+  const settings = PROFILE_SETTINGS[name] || PROFILE_SETTINGS.Patricia;
+  return {
+    version: 5.1,
+    stats: { xp: settings.startingXp, words: 0, oral: 0 },
+    completed: {},
+    history: [],
+    activityDates: [],
+    badges: []
+  };
+};
+
+function profileStorageKey(name, prefix = STORAGE_PREFIX) {
+  return `${prefix}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 }
 
-function localDay(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function previousLocalDay() {
-  const date = new Date();
-  date.setDate(date.getDate() - 1);
-  return localDay(date);
-}
-
-function earnedBadges(stats, completedCount) {
-  const badges = [];
-  if (completedCount >= 1) badges.push('Premier pas');
-  if (completedCount >= 10) badges.push('10 exercices réussis');
-  if (completedCount >= 40) badges.push('Cap des 40');
-  if (stats.streak >= 3) badges.push('Série de 3 jours');
-  if (stats.streak >= 7) badges.push('Série de 7 jours');
-  if (stats.oral >= 80) badges.push('Belle prononciation');
-  if (stats.xp >= 1000) badges.push('Niveau 3 atteint');
-  return badges;
-}
-
-function profileStorageKey(name) {
-  return `${STORAGE_PREFIX}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+function mergeProfile(name, source) {
+  const defaults = createDefaultProfile(name);
+  const settings = PROFILE_SETTINGS[name] || PROFILE_SETTINGS.Patricia;
+  return {
+    ...defaults,
+    ...(source || {}),
+    version: 5.1,
+    stats: {
+      ...defaults.stats,
+      ...((source && source.stats) || {}),
+      xp: Math.max(settings.startingXp, Number(source?.stats?.xp || 0))
+    },
+    completed: source?.completed || {},
+    history: Array.isArray(source?.history) ? source.history : [],
+    activityDates: Array.isArray(source?.activityDates) ? source.activityDates : [],
+    badges: Array.isArray(source?.badges) ? source.badges : []
+  };
 }
 
 function loadProfile(name) {
   try {
-    const saved = localStorage.getItem(profileStorageKey(name));
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return {
-        ...createDefaultProfile(name),
-        ...parsed,
-        stats: { ...createDefaultProfile(name).stats, ...(parsed.stats || {}) },
-        completed: parsed.completed || {},
-        history: Array.isArray(parsed.history) ? parsed.history : [],
-        badges: Array.isArray(parsed.badges) ? parsed.badges : []
-      };
+    const current = localStorage.getItem(profileStorageKey(name));
+    if (current) return mergeProfile(name, JSON.parse(current));
+
+    const v4 = localStorage.getItem(profileStorageKey(name, OLD_STORAGE_PREFIX));
+    if (v4) {
+      const migrated = mergeProfile(name, JSON.parse(v4));
+      localStorage.setItem(profileStorageKey(name), JSON.stringify(migrated));
+      return migrated;
     }
 
-    // Migration automatique des données de la V3 vers la V4.
     const oldUsers = JSON.parse(localStorage.getItem('mi-users-v3-1') || 'null');
     const oldCompleted = JSON.parse(localStorage.getItem('mi-completed-v3-1') || 'null');
     const oldHistory = JSON.parse(localStorage.getItem('mi-history-v3-1') || 'null');
-    const migrated = {
-      ...createDefaultProfile(name),
-      stats: { ...createDefaultProfile(name).stats, ...(oldUsers?.[name] || {}) },
+    const migrated = mergeProfile(name, {
+      stats: oldUsers?.[name] || {},
       completed: oldCompleted?.[name] || {},
-      history: Array.isArray(oldHistory) ? oldHistory.filter((item) => item.who === name) : []
-    };
+      history: Array.isArray(oldHistory)
+        ? oldHistory.filter((item) => item.who === name)
+        : []
+    });
     localStorage.setItem(profileStorageKey(name), JSON.stringify(migrated));
     return migrated;
   } catch (error) {
@@ -111,7 +104,7 @@ function saveProfile(name, data) {
 
 const catalog = {
   daily: {
-    title: '1. Vie quotidienne', icon: Home,
+    title: '1. Vie quotidienne', icon: Home, minLevel: 1,
     description: 'Se présenter, faire les courses, se repérer et échanger au quotidien',
     items: [
       ['Hola, ¿cómo está?', 'Bonjour, comment allez-vous ?', 'Muy bien, gracias. ¿Y usted?', 'mouï biène, grassias, i oustèd'],
@@ -127,7 +120,7 @@ const catalog = {
     ]
   },
   family: {
-    title: '2. Famille', icon: Users,
+    title: '2. Famille', icon: Users, minLevel: 1,
     description: 'Repas, journée, projets et échanges avec les proches',
     items: [
       ['¿Cómo está la familia?', 'Comment va la famille ?', 'La familia está bien.', 'la familia ésta biène'],
@@ -143,7 +136,7 @@ const catalog = {
     ]
   },
   doctor: {
-    title: '3. Médecin', icon: Stethoscope,
+    title: '3. Médecin', icon: Stethoscope, minLevel: 2,
     description: 'Symptômes, rendez-vous, allergies et traitements',
     items: [
       ['¿Qué le pasa?', 'Qu’est-ce qui vous arrive ?', 'Tengo dolor de cabeza.', 'tèn-go dolor dé kabéssa'],
@@ -159,7 +152,7 @@ const catalog = {
     ]
   },
   pharmacy: {
-    title: '4. Pharmacie', icon: HeartPulse,
+    title: '4. Pharmacie', icon: HeartPulse, minLevel: 2,
     description: 'Médicaments, ordonnance, posologie et allergies',
     items: [
       ['¿Qué necesita?', 'De quoi avez-vous besoin ?', 'Necesito algo para el dolor.', 'nésséssito algo para èl dolor'],
@@ -175,7 +168,7 @@ const catalog = {
     ]
   },
   admin: {
-    title: '5. Administration', icon: Building2,
+    title: '5. Administration', icon: Building2, minLevel: 3,
     description: 'NIE, mairie, rendez-vous et documents officiels',
     items: [
       ['¿Tiene cita previa?', 'Avez-vous rendez-vous ?', 'Sí, tengo cita a las diez.', 'si, tèn-go sita a las dièss'],
@@ -191,7 +184,7 @@ const catalog = {
     ]
   },
   bank: {
-    title: '6. Banque', icon: Landmark,
+    title: '6. Banque', icon: Landmark, minLevel: 3,
     description: 'Compte bancaire, carte, virement et retrait',
     items: [
       ['¿En qué puedo ayudarle?', 'Comment puis-je vous aider ?', 'Quiero abrir una cuenta.', 'kièro abrir ouna kouènta'],
@@ -207,7 +200,7 @@ const catalog = {
     ]
   },
   insurance: {
-    title: '7. Assurances', icon: ShieldCheck,
+    title: '7. Assurances', icon: ShieldCheck, minLevel: 3,
     description: 'Contrat, devis, franchise, assistance et sinistre',
     items: [
       ['¿Qué desea asegurar?', 'Que souhaitez-vous assurer ?', 'Quiero asegurar mi coche.', 'kièro asségourar mi kotché'],
@@ -223,7 +216,7 @@ const catalog = {
     ]
   },
   car: {
-    title: '8. Automobile', icon: Car,
+    title: '8. Automobile', icon: Car, minLevel: 3,
     description: 'Garage, panne, réparation, contrôle et dépannage',
     items: [
       ['¿Cuál es el problema?', 'Quel est le problème ?', 'El coche no arranca.', 'èl kotché no arranka'],
@@ -285,6 +278,46 @@ function speak(text, rate = 0.9) {
   window.speechSynthesis.speak(voice);
 }
 
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getLevel(xp, name) {
+  const startingLevel = PROFILE_SETTINGS[name]?.startingLevel || 1;
+  const earned = [...LEVELS].reverse().find((item) => xp >= item.minXp)?.level || 1;
+  const number = Math.max(startingLevel, earned);
+  return LEVELS.find((item) => item.level === number) || LEVELS[0];
+}
+
+function calculateStreak(activityDates) {
+  const unique = new Set(activityDates || []);
+  let cursor = new Date();
+  let streak = 0;
+  if (!unique.has(localDateKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+  while (unique.has(localDateKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+function getBadges(profile) {
+  const count = Object.keys(profile.completed || {}).length;
+  const streak = calculateStreak(profile.activityDates);
+  const badges = [];
+  if (count >= 1) badges.push('Premier pas');
+  if (count >= 10) badges.push('10 exercices réussis');
+  if (count >= 25) badges.push('Exploratrice');
+  if (count >= 50) badges.push('Grande voyageuse');
+  if (profile.stats.oral >= 85) badges.push('Belle prononciation');
+  if (streak >= 3) badges.push('Série de 3 jours');
+  if (streak >= 7) badges.push('Semaine parfaite');
+  return badges;
+}
+
 function App() {
   const [who, setWho] = useState(() => localStorage.getItem(ACTIVE_PROFILE_KEY) || '');
   const [profileData, setProfileData] = useState(null);
@@ -314,7 +347,9 @@ function App() {
   }, [who, profileData, profileLoaded]);
 
   useEffect(() => {
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
   }, []);
 
   const Recognition = useMemo(
@@ -326,6 +361,12 @@ function App() {
     setProfileLoaded(false);
     setProfileData(null);
     setWho(name);
+  }
+
+  function resetAttempt() {
+    setText('');
+    setResult(null);
+    setError('');
   }
 
   function changeProfile() {
@@ -347,7 +388,7 @@ function App() {
           <div style={{ display: 'grid', gap: 14 }}>
             {PROFILE_NAMES.map((name) => (
               <button key={name} type="button" onClick={() => selectProfile(name)} style={{ padding: 18, border: 0, borderRadius: 16, cursor: 'pointer', fontWeight: 700, fontSize: 18, background: '#f5f5f5', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }}>
-                👤 {name}
+                👤 {name} · Niveau {PROFILE_SETTINGS[name].startingLevel}
               </button>
             ))}
           </div>
@@ -369,21 +410,26 @@ function App() {
   const exerciseKey = `${category}-${exerciseIndex}`;
   const doneCount = Object.keys(completed).length;
   const totalExercises = Object.values(catalog).reduce((sum, module) => sum + module.items.length, 0);
-  const level = getLevel(who, user.xp);
+  const level = getLevel(user.xp, who);
+  const streak = calculateStreak(profileData.activityDates);
+  const badges = getBadges(profileData);
   const nextLevel = LEVELS.find((item) => item.level === level.level + 1);
   const levelProgress = nextLevel
     ? Math.min(100, Math.round(((user.xp - level.minXp) / (nextLevel.minXp - level.minXp)) * 100))
     : 100;
-  const dailyGoal = 5;
-  const badges = earnedBadges(user, doneCount);
+  const today = localDateKey();
+  const todayAttempts = history.filter((item) => item.dayKey === today).length;
+  const dailyProgress = Math.min(DAILY_GOAL, todayAttempts);
 
-  function resetAttempt() {
-    setText('');
-    setResult(null);
-    setError('');
+  function isUnlocked(module) {
+    return level.level >= module.minLevel;
   }
 
   function openExercise(categoryId, index = 0) {
+    if (!isUnlocked(catalog[categoryId])) {
+      alert(`Ce thème se débloque au niveau ${catalog[categoryId].minLevel}.`);
+      return;
+    }
     setCategory(categoryId);
     setExerciseIndex(index);
     resetAttempt();
@@ -397,38 +443,36 @@ function App() {
   }
 
   function saveAttempt(answer) {
-    if (!answer.trim() || result !== null) return;
     const value = calculateScore(answer, exercise[2]);
-    const firstSuccess = value >= 70 && !completed[exerciseKey];
-    const today = localDay();
     setResult(value);
     setProfileData((current) => {
-      const alreadyActiveToday = current.stats.lastActivityDate === today;
-      const continuesStreak = current.stats.lastActivityDate === previousLocalDay();
-      const successfulToday = current.stats.dailyDate === today ? current.stats.dailyCount : 0;
-      const nextCompleted = value >= 70
-        ? { ...current.completed, [exerciseKey]: true }
-        : current.completed;
-      const nextStats = {
-        ...current.stats,
-        xp: current.stats.xp + (value >= 70 ? 15 : 5),
-        words: current.stats.words + (firstSuccess ? normalize(exercise[2]).split(' ').length : 0),
-        oral: Math.min(100, Math.round(((current.stats.oral * Math.max(current.history.length, 1)) + value) / (Math.max(current.history.length, 1) + 1))),
-        streak: alreadyActiveToday ? current.stats.streak : (continuesStreak ? current.stats.streak + 1 : 1),
-        lastActivityDate: today,
-        dailyDate: today,
-        dailyCount: successfulToday + (value >= 70 ? 1 : 0)
-      };
+      const firstSuccess = value >= 70 && !current.completed[exerciseKey];
+      const currentDoneCount = Object.keys(current.completed || {}).length;
+      const dayKey = localDateKey();
       return {
         ...current,
-        version: 5,
-        stats: nextStats,
-        completed: nextCompleted,
-        badges: earnedBadges(nextStats, Object.keys(nextCompleted).length),
+        stats: {
+          ...current.stats,
+          xp: current.stats.xp + (value >= 70 ? 15 : 5),
+          words: current.stats.words + (firstSuccess ? normalize(exercise[2]).split(' ').length : 0),
+          oral: Math.min(100, Math.round(((current.stats.oral * Math.max(currentDoneCount, 1)) + value) / (Math.max(currentDoneCount, 1) + 1)))
+        },
+        completed: value >= 70
+          ? { ...current.completed, [exerciseKey]: true }
+          : current.completed,
+        activityDates: Array.from(new Set([...(current.activityDates || []), dayKey])),
         history: [
-          { who, category: categoryData.title, exercise: exerciseIndex + 1, text: answer, score: value, date: new Date().toLocaleDateString('fr-FR') },
+          {
+            who,
+            category: categoryData.title,
+            exercise: exerciseIndex + 1,
+            text: answer,
+            score: value,
+            date: new Date().toLocaleDateString('fr-FR'),
+            dayKey
+          },
           ...current.history
-        ].slice(0, 60)
+        ].slice(0, 100)
       };
     });
   }
@@ -436,7 +480,7 @@ function App() {
   function listen() {
     setError('');
     if (!Recognition) {
-      setError('Reconnaissance vocale indisponible. Utilisez Safari récent et autorisez le micro.');
+      setError('Reconnaissance vocale indisponible. Vous pouvez écrire votre réponse dans la zone prévue.');
       return;
     }
     const recognition = new Recognition();
@@ -467,15 +511,17 @@ function App() {
           ['home', 'Accueil', Home], ['path', 'Parcours', BookOpen],
           ['talk', 'Coach vocal', MessageCircle], ['progress', 'Progression', Activity]
         ].map(([id, label, Icon]) => (
-          <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}><Icon /> {label}</button>
+          <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
+            <Icon /> {label}
+          </button>
         ))}
       </aside>
 
       <main>
         <header>
-          <div><small>¡Buenos días, {who}!</small><h1>Objectif Espagne</h1><p style={{ margin: 0, color: '#666' }}>Niveau {level.level} · {level.label}</p></div>
+          <div><small>¡Buenos días, {who}!</small><h1>Objectif Espagne</h1></div>
           <div className="profiles">
-            <strong>👤 {who}</strong>
+            <strong>👤 {who} · Niveau {level.level}</strong>
             <button type="button" onClick={changeProfile}>Changer de profil</button>
           </div>
         </header>
@@ -484,19 +530,21 @@ function App() {
           <section className="hero">
             <h2>Parler en Espagne, pour de vrai.</h2>
             <p>{totalExercises} exercices pratiques avec entraînement vocal et progression individuelle.</p>
-            <button onClick={() => openExercise('daily')}>🎤 Commencer à parler</button>
+            <button onClick={() => openExercise(who === 'Marie-Christine' ? 'admin' : 'daily')}>🎤 Continuer à apprendre</button>
           </section>
+
           <div className="stats">
-            <article><Flame /><b>{user.streak || 0}</b><span>Jours de série</span></article>
+            <article><Flame /><b>{streak}</b><span>Jours de série</span></article>
             <article><Sparkles /><b>{user.xp}</b><span>XP</span></article>
-            <article><Sparkles /><b>{user.words}</b><span>Mots</span></article>
-            <article><Award /><b>{user.oral}%</b><span>Oral</span></article>
+            <article><Award /><b>Niveau {level.level}</b><span>{level.name}</span></article>
             <article><CheckCircle /><b>{doneCount}/{totalExercises}</b><span>Réussis</span></article>
           </div>
-          <section className="hero" style={{ marginTop: 18 }}>
-            <h3>🎯 Défi du jour</h3>
-            <p>{Math.min(user.dailyDate === localDay() ? user.dailyCount : 0, dailyGoal)} / {dailyGoal} exercices réussis aujourd’hui</p>
-            <div className="progress"><i><em style={{ width: `${Math.min(100, ((user.dailyDate === localDay() ? user.dailyCount : 0) / dailyGoal) * 100)}%` }} /></i></div>
+
+          <section className="hero" style={{ marginTop: 20 }}>
+            <h3><Target /> Défi du jour</h3>
+            <p>Réaliser {DAILY_GOAL} exercices. Progression : {dailyProgress}/{DAILY_GOAL}</p>
+            <div className="progress"><i><em style={{ width: `${Math.round((dailyProgress / DAILY_GOAL) * 100)}%` }} /></i></div>
+            <p>{dailyProgress >= DAILY_GOAL ? '🏆 Défi relevé ! Vous pouvez continuer autant que vous voulez.' : 'Chaque essai compte. Aucune limite quotidienne.'}</p>
           </section>
         </>}
 
@@ -506,9 +554,10 @@ function App() {
             {Object.entries(catalog).map(([id, module]) => {
               const Icon = module.icon;
               const count = module.items.filter((_, index) => completed[`${id}-${index}`]).length;
-              return <article key={id} onClick={() => openExercise(id)}>
+              const unlocked = isUnlocked(module);
+              return <article key={id} onClick={() => openExercise(id)} style={{ opacity: unlocked ? 1 : 0.55, cursor: unlocked ? 'pointer' : 'not-allowed' }}>
                 <Icon /><h3>{module.title}</h3><p>{module.description}</p>
-                <strong>{count}/{module.items.length} exercices réussis</strong>
+                <strong>{unlocked ? `${count}/${module.items.length} exercices réussis` : `🔒 Niveau ${module.minLevel} requis`}</strong>
               </article>;
             })}
           </div>
@@ -518,7 +567,9 @@ function App() {
           <h2>Coach vocal</h2>
           <div className="pills">
             {Object.entries(catalog).map(([id, module]) => (
-              <button key={id} className={category === id ? 'on' : ''} onClick={() => openExercise(id)}>{module.title.replace(/^\d+\. /, '')}</button>
+              <button key={id} disabled={!isUnlocked(module)} className={category === id ? 'on' : ''} onClick={() => openExercise(id)}>
+                {module.title.replace(/^\d+\. /, '')}{!isUnlocked(module) ? ' 🔒' : ''}
+              </button>
             ))}
           </div>
           <div className="conversationLayout">
@@ -543,7 +594,7 @@ function App() {
                 {listening ? <MicOff /> : <Mic />}{listening ? ' Je vous écoute…' : ' Répondre au micro'}
               </button>
               {error && <p className="error">{error}</p>}
-              <button className="check" disabled={!text.trim() || result !== null} onClick={() => saveAttempt(text)}>{result !== null ? 'Réponse enregistrée' : 'Corriger'}</button>
+              <button className="check" disabled={!text.trim()} onClick={() => saveAttempt(text)}>Corriger</button>
               {result !== null && <div className="feedback">
                 <b className={result >= 70 ? 'good' : 'retry'}>{result}%</b>
                 <p>✅ Modèle : {exercise[2]}</p><p>🗣 Prononciation : {exercise[3]}</p>
@@ -559,12 +610,21 @@ function App() {
 
         {tab === 'progress' && <>
           <h2>Progression de {who}</h2>
+          <div className="stats">
+            <article><Award /><b>Niveau {level.level}</b><span>{level.name}</span></article>
+            <article><Sparkles /><b>{user.xp}</b><span>XP</span></article>
+            <article><Flame /><b>{streak}</b><span>Jours</span></article>
+            <article><Trophy /><b>{badges.length}</b><span>Badges</span></article>
+          </div>
+          <div className="progress"><b>Vers le niveau suivant</b><span>{levelProgress}%</span><i><em style={{ width: `${levelProgress}%` }} /></i></div>
           <div className="progress"><b>Expression orale</b><span>{user.oral}%</span><i><em style={{ width: `${user.oral}%` }} /></i></div>
           <p>{doneCount} exercices réussis sur {totalExercises}.</p>
-          <div className="progress"><b>Niveau {level.level} · {level.label}</b><span>{levelProgress}%</span><i><em style={{ width: `${levelProgress}%` }} /></i></div>
-          <section className="history"><h3>Badges</h3>
-            {badges.length ? badges.map((badge) => <article key={badge}><b>🏆 {badge}</b></article>) : <p>Ton premier badge arrive après le premier exercice réussi.</p>}
+
+          <section className="history">
+            <h3>🏆 Badges</h3>
+            {badges.length ? badges.map((badge) => <article key={badge}><b>{badge}</b></article>) : <p>Le premier badge arrivera dès le premier exercice réussi.</p>}
           </section>
+
           <section className="history"><h3>Historique oral</h3>
             {history.length ? history.map((item, index) => (
               <article key={`${item.date}-${index}`}>
